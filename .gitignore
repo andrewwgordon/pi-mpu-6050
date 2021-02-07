@@ -50,3 +50,9 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+i2cdev.c
+i2cdev.h
+
+# vscode
+.vscode/*
+mpu6050_example

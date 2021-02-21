@@ -79,10 +79,11 @@ typedef struct mpu6050_rangescale_struct
  *  @brief Engineering unit of measure multipliers
  *
  */
-#define G               (1.0)                               // Acceleration in g (default)
-#define MS2             (9.80665)                           // Acceleration in ms-2
-#define DEGS            (1.0)                               // Rotational velocity in deg/s (default)
-#define RADS            (0.0174533)                         // Rotational veloclity in rad/s
+#define G                   (1.0)                           // Acceleration in g (default)
+#define MS2                 (9.80665)                       // Acceleration in ms-2
+#define DEGS                (1.0)                           // Rotational velocity in deg/s (default)
+#define RADS                (0.0174533)                     // Rotational veloclity in rad/s
+#define GYRO_DEFAULT_COEFF  (0.98)
 
 /**
  *  @brief Sample rate clock source.
@@ -110,6 +111,7 @@ typedef struct mpu6050_config_struct
     float                   gyro_uom;                       // Gyro units of measure
     mpu6050_rangescale_t    accel_range;                    // Accelerometer range
     float                   accel_uom;                      // Accelerometer units of measure
+    float                   gyro_drift_coeff;               // Gyro drift coefficent    
 } mpu6050_config_t;
 
 /**
@@ -146,6 +148,18 @@ typedef struct mpu6050_motion_struct
     float gy;                                               // Rotational velocity in y
     float gz;                                               // Rotational velocity in z
 } mpu6050_motion_t;
+
+/**
+ *  @brief Orientation
+ *
+ */
+typedef struct mpu6050_orientation_struct
+{
+    uint16_t t;                                             // Time sampled in ms
+    float pitch;
+    float roll;
+    float yaw;
+} mpu6050_orientation_t;
 
 /**
 *   Aquire a connection to the MPU.
@@ -200,6 +214,16 @@ mpu6050_setoffsets(int16_t mpu6050_h,mpu6050_offset_t offsets);
 */
 int8_t 
 mpu6050_getmotion(int16_t mpu6050_h,mpu6050_config_t mpu6050_config,mpu6050_motion_t *motion);
+
+/**
+*   Get the orientation
+*   @param[in] mpu6050_h Handle to the MPU.
+*   @param[in] mpu6050_config MPU configuration.
+*   @param[out] orientation Current orientation of the MPU.
+*   @return Sucess or error.
+*/
+int8_t 
+mpu6050_getorientation(int16_t mpu6050_h,mpu6050_config_t mpu6050_config,mpu6050_orientation_t *orientation);
 
 /**
 *   Reset the MPU.

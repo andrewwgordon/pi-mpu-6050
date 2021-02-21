@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 
 #include "mpu6050.h"
 
@@ -11,6 +12,8 @@ main(void)
     int16_t             mpu6050_h;
     uint8_t             deviceid;
     mpu6050_config_t    config;
+    struct timespec     monotime;
+    uint16_t            t_now;
     
     // Set the I2C bus and device address.
     //
@@ -41,11 +44,12 @@ main(void)
     }
     // Set the MPU confiuration.
     //
-    config.accel_range = ACCEL_FS_2;        // +/- 2g
-    config.accel_uom= G;                    // UoM in g.
-    config.gyro_range = GYRO_FS_250;        // +/- 250 deg/s
-    config.gyro_uom = DEGS;                 // UoM in deg/s
-    config.clock_source = CLOCK_PLL_XGYRO;  // Clock source X Gyro
+    config.accel_range = ACCEL_FS_2;                // +/- 2g
+    config.accel_uom= G;                            // UoM in g.
+    config.gyro_range = GYRO_FS_250;                // +/- 250 deg/s
+    config.gyro_uom = DEGS;                         // UoM in deg/s
+    config.clock_source = CLOCK_PLL_XGYRO;          // Clock source X Gyro
+    config.gyro_drift_coeff = GYRO_DEFAULT_COEFF;   // Gyro drif compensation
     // Iniitalise the MPU
     //
     if (mpu6050_initialise(mpu6050_h,config) != ERROR)
@@ -91,7 +95,7 @@ main(void)
     getchar();
     // Get a thousand readings.
     //
-    for (uint16_t i = 0;i < 1000;i++)
+    for (uint16_t i = 0;i < 100;i++)
     {
         if (mpu6050_getmotion(mpu6050_h,config,&motion) != ERROR)
         {
@@ -102,6 +106,25 @@ main(void)
             perror("Error");
         }        
         usleep(10000);
+    }
+    mpu6050_orientation_t orientation;
+    orientation.pitch = 0;
+    orientation.roll = 0;
+    orientation.yaw = 0;
+    clock_gettime(CLOCK_MONOTONIC_RAW,&monotime);
+    t_now = monotime.tv_sec * 1000 + monotime.tv_nsec / 1000;
+    orientation.t = t_now;
+    for (uint16_t i = 0;i < 1000;i++)
+    {
+        if (mpu6050_getorientation(mpu6050_h,config,&orientation) != ERROR)
+        {
+            printf("roll:%f pitch:%f yaw:%f\n",orientation.roll,orientation.pitch,orientation.yaw);
+        }
+        else
+        {
+            perror("Error");
+        }        
+        usleep(1000);
     }
     return 0;
 }

@@ -6,6 +6,9 @@
 *   @brief TDK InvenSense MPU6050 driver.
 *
 */
+#include <math.h>
+#include <time.h>
+
 #include "i2cdev.h"
 #include "mpu6050.h"
 
@@ -713,3 +716,59 @@ mpu6050_getmotion(int16_t mpu6050_h,mpu6050_config_t config,mpu6050_motion_t *mo
     motion->gz = (float)two_complement_to_int(buffer[13],buffer[12]) / config.gyro_range.scale  * config.gyro_uom;
     return OK;
 }
+
+/**
+ * Angle limit functiob
+ * @param[in] angle angle to check
+ * @param[in] limit angle limit
+ * @return limited angle
+ */
+float
+limit_angle(float angle, float limit)
+{
+    while (angle > limit) angle -= 2 * limit;
+    while (angle < -limit) angle += 2 * limit;
+    return angle;
+}
+
+
+/**
+*   Get the orientation
+*   @param[in] mpu6050_h Handle to the MPU.
+*   @param[in] mpu6050_config MPU configuration.
+*   @param[out] orientation Current orientation of the MPU.
+*   @return Sucess or error.
+*/
+int8_t 
+mpu6050_getorientation(int16_t mpu6050_h,mpu6050_config_t mpu6050_config,mpu6050_orientation_t *orientation)
+{
+    mpu6050_motion_t motion;
+    float sgz;
+    float angle_ax;
+    float angle_ay;
+    uint16_t t_now;
+    struct timespec monotime;
+    float dt;
+
+
+    // Get current motion
+    //
+    if (mpu6050_getmotion(mpu6050_h,mpu6050_config,&motion) == ERROR)
+    {
+        return ERROR;
+    }
+    // Update the time and calculate dt
+    //
+    clock_gettime(CLOCK_MONOTONIC_RAW,&monotime);
+    t_now = monotime.tv_sec * 1000 + monotime.tv_nsec / 1000;
+    dt = (t_now - orientation->t) * 1E-3;
+    // Estimate orientation. Pitch and roll is not bad, could do with noise filtering.
+    //
+    orientation->pitch = -(atan2(motion.ax, sqrt(motion.ay * motion.ay + motion.az * motion.az)) * 180.0) / M_PI;
+    orientation->roll = (atan2(motion.ay, motion.az) * 180.0) / M_PI;
+    // This is pretty poor. TDKs on-board motion processing is supposed to be far better. ToDo.
+    //
+    orientation->yaw += motion.gz * dt * mpu6050_config.gyro_drift_coeff;
+    orientation->t = t_now;
+    return OK;
+} 

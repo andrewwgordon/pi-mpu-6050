@@ -253,6 +253,8 @@
 #define DMP_MEMORY_BANK_SIZE            256
 #define DMP_MEMORY_CHUNK_SIZE           16
 
+#define COMPLEMENTARY_FILTER_ALPHA 0.98f
+
 /**
  *  @brief MPU6050 regsiters as per https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf.
  *
@@ -665,49 +667,56 @@ mpu6050_getoffsets(int16_t mpu6050_h,mpu6050_offset_t *mpu6050_offset)
 }
 
 /**
-*   Return LSB, MSB in a word to 16-bit signed int.
-*   @param[in] LSB Left significant byte
-*   @param[in] MSB Most significant byte
-*   @return int16_t
-*/
+ * @brief Convert two bytes (LSB, MSB) in two's complement format to a signed 16-bit integer.
+ *
+ * @param[in] LSB Least significant byte
+ * @param[in] MSB Most significant byte
+ * @return int16_t Signed 16-bit integer value
+ */
 int16_t 
 two_complement_to_int(uint8_t LSB, uint8_t MSB) 
 {
-	int16_t signed_int = 0;
-	uint16_t word;
+    int16_t signed_int = 0;
+    uint16_t word;
 
-	word = (uint16_t)(( MSB << 8) | LSB);
-	if((word & 0x8000) == 0x8000) 
+    // Combine MSB and LSB into a 16-bit word
+    word = (uint16_t)(( MSB << 8) | LSB);
+    // Check if the sign bit is set (negative number)
+    if((word & 0x8000) == 0x8000) 
     {
-		signed_int = (int16_t) -(~word);
-	} 
+        // Negative value: invert and add sign
+        signed_int = (int16_t) -(~word);
+    } 
     else 
     {
-		signed_int = (int16_t) (word & 0x7fff);
-	}
-	return signed_int;
+        // Positive value: mask sign bit
+        signed_int = (int16_t) (word & 0x7fff);
+    }
+    return signed_int;
 }
 
 /**
-*   Get motion readings.
-*   @param[in] mpu6050_h Handle to the MPU.
-*   @param[in] mpu6050_config MPU configuration.
-*   @param[out] motion Current motion readings for Accelerometer and Gyro.
-*   @return Sucess or error.
-*/
+ * @brief Read current motion data (acceleration and gyro) from the MPU6050 sensor.
+ *
+ * Reads 14 bytes from the sensor, converts raw data to physical units using scale factors,
+ * and fills the motion struct with acceleration (ax, ay, az) and gyro (gx, gy, gz) values.
+ *
+ * @param[in] mpu6050_h Handle to the MPU.
+ * @param[in] mpu6050_config MPU configuration (contains scale factors and units).
+ * @param[out] motion Pointer to struct to store current motion readings.
+ * @return OK on success, ERROR on failure.
+ */
 int8_t 
 mpu6050_getmotion(int16_t mpu6050_h,mpu6050_config_t config,mpu6050_motion_t *motion)
 {
     uint8_t buffer[14];
 
     // Read 14 bytes from ACCEL_XOUT_H, fetching acceleration and gyro readings in one go.
-    //
     if (i2cdev_readbytes(mpu6050_h,ACCEL_XOUT_H,14,buffer) == ERROR)
     {
        return ERROR;
     }
     // Convert raw word to float via scale factor and units of measure.
-    //
     motion->ax = (float)two_complement_to_int(buffer[1],buffer[0]) / config.accel_range.scale * config.accel_uom;
     motion->ay = (float)two_complement_to_int(buffer[3],buffer[2]) / config.accel_range.scale * config.accel_uom;
     motion->az = (float)two_complement_to_int(buffer[5],buffer[4]) / config.accel_range.scale * config.accel_uom;
@@ -718,57 +727,124 @@ mpu6050_getmotion(int16_t mpu6050_h,mpu6050_config_t config,mpu6050_motion_t *mo
 }
 
 /**
- * Angle limit functiob
- * @param[in] angle angle to check
- * @param[in] limit angle limit
- * @return limited angle
+ * @brief Limit an angle to the range [-limit, limit].
+ *
+ * @param[in] angle Angle to check
+ * @param[in] limit Maximum absolute value for the angle
+ * @return float Limited angle
  */
 float
 limit_angle(float angle, float limit)
 {
+    // Wrap angle to the range [-limit, limit]
     while (angle > limit) angle -= 2 * limit;
     while (angle < -limit) angle += 2 * limit;
     return angle;
 }
 
-
 /**
-*   Get the orientation
-*   @param[in] mpu6050_h Handle to the MPU.
-*   @param[in] mpu6050_config MPU configuration.
-*   @param[out] orientation Current orientation of the MPU.
-*   @return Sucess or error.
-*/
+ * @brief Estimate the current orientation (pitch, roll, yaw) of the MPU6050 sensor.
+ *
+ * Uses a complementary filter to combine accelerometer and gyroscope data for pitch and roll.
+ * Integrates gyro Z for yaw (subject to drift). Updates the orientation struct with new values.
+ *
+ * @param[in] mpu6050_h Handle to the MPU.
+ * @param[in] mpu6050_config MPU configuration (contains scale factors, drift coefficients, etc).
+ * @param[out] orientation Pointer to struct to store current orientation (pitch, roll, yaw, t).
+ * @return OK on success, ERROR on failure.
+ */
 int8_t 
 mpu6050_getorientation(int16_t mpu6050_h,mpu6050_config_t mpu6050_config,mpu6050_orientation_t *orientation)
 {
-    mpu6050_motion_t motion;
-    float sgz;
-    float angle_ax;
-    float angle_ay;
-    uint16_t t_now;
-    struct timespec monotime;
-    float dt;
+    mpu6050_motion_t motion; // Struct to hold current motion readings
+    float sgz; // Unused, can be removed
+    float angle_ax; // Unused, can be removed
+    float angle_ay; // Unused, can be removed
+    uint16_t t_now; // Unused, replaced by uint64_t below
+    struct timespec monotime; // For high-precision time
+    float dt; // Time delta in seconds
 
-
-    // Get current motion
-    //
+    // Get current motion (acceleration and gyro)
     if (mpu6050_getmotion(mpu6050_h,mpu6050_config,&motion) == ERROR)
     {
         return ERROR;
     }
-    // Update the time and calculate dt
-    //
+    // Update the time and calculate dt (in seconds)
     clock_gettime(CLOCK_MONOTONIC_RAW,&monotime);
-    t_now = monotime.tv_sec * 1000 + monotime.tv_nsec / 1000;
-    dt = (t_now - orientation->t) * 1E-3;
-    // Estimate orientation. Pitch and roll is not bad, could do with noise filtering.
-    //
-    orientation->pitch = -(atan2(motion.ax, sqrt(motion.ay * motion.ay + motion.az * motion.az)) * 180.0) / M_PI;
-    orientation->roll = (atan2(motion.ay, motion.az) * 180.0) / M_PI;
-    // This is pretty poor. TDKs on-board motion processing is supposed to be far better. ToDo.
-    //
-    orientation->yaw += motion.gz * dt * mpu6050_config.gyro_drift_coeff;
-    orientation->t = t_now;
+    uint64_t t_now = (uint64_t)monotime.tv_sec * 1000ULL + (uint64_t)monotime.tv_nsec / 1000000ULL;
+    dt = (orientation->t > 0) ? ((float)(t_now - orientation->t) * 1E-3f) : 0.0f;
+
+    // Calculate pitch and roll from accelerometer (in degrees)
+    float accel_pitch = -(atan2f(motion.ax, sqrtf(motion.ay * motion.ay + motion.az * motion.az)) * 180.0f) / M_PI;
+    float accel_roll = (atan2f(motion.ay, motion.az) * 180.0f) / M_PI;
+
+    // Integrate gyro rates for pitch and roll (degrees)
+    if (dt > 0.0f && dt < 1.0f) { // Sanity check for dt
+        orientation->pitch += motion.gy * dt;
+        orientation->roll  += motion.gx * dt;
+    }
+    // Complementary filter for pitch and roll
+    orientation->pitch = COMPLEMENTARY_FILTER_ALPHA * orientation->pitch + (1.0f - COMPLEMENTARY_FILTER_ALPHA) * accel_pitch;
+    orientation->roll  = COMPLEMENTARY_FILTER_ALPHA * orientation->roll  + (1.0f - COMPLEMENTARY_FILTER_ALPHA) * accel_roll;
+
+    // Integrate gyro Z for yaw (subject to drift)
+    if (dt > 0.0f && dt < 1.0f) {
+        orientation->yaw += motion.gz * dt * mpu6050_config.gyro_drift_coeff;
+    }
+    // Clamp angles to reasonable ranges
+    orientation->pitch = limit_angle(orientation->pitch, 180.0f);
+    orientation->roll  = limit_angle(orientation->roll, 180.0f);
+    orientation->yaw   = limit_angle(orientation->yaw, 180.0f);
+    orientation->t = t_now; // Update timestamp
     return OK;
-} 
+}
+
+/**
+ * @brief Automatically calibrate the MPU6050 by averaging multiple samples to determine offsets.
+ *
+ * This function collects a specified number of samples while the MPU6050 is stationary,
+ * averages the raw accelerometer and gyroscope readings, and sets the offsets accordingly.
+ * The Z accelerometer offset is adjusted to account for gravity (assuming the sensor is flat).
+ *
+ * @param[in] mpu6050_h Handle to the MPU.
+ * @param[in] config MPU configuration (scale factors, etc).
+ * @param[out] offsets Pointer to struct to store calculated offsets.
+ * @param[in] samples Number of samples to average (recommended: 1000).
+ * @return OK on success, ERROR on failure.
+ */
+int8_t 
+mpu6050_autocalibration(int16_t mpu6050_h, mpu6050_config_t config, mpu6050_offset_t *offsets, uint16_t samples)
+{
+    if (samples == 0) return ERROR;
+    float sum_ax = 0, sum_ay = 0, sum_az = 0;
+    float sum_gx = 0, sum_gy = 0, sum_gz = 0;
+    mpu6050_motion_t motion;
+    for (uint16_t i = 0; i < samples; i++) {
+        if (mpu6050_getmotion(mpu6050_h, config, &motion) == ERROR) {
+            return ERROR;
+        }
+        sum_ax += motion.ax;
+        sum_ay += motion.ay;
+        sum_az += motion.az;
+        sum_gx += motion.gx;
+        sum_gy += motion.gy;
+        sum_gz += motion.gz;
+        usleep(1000); // 1ms delay between samples
+    }
+    float avg_ax = sum_ax / samples;
+    float avg_ay = sum_ay / samples;
+    float avg_az = sum_az / samples;
+    float avg_gx = sum_gx / samples;
+    float avg_gy = sum_gy / samples;
+    float avg_gz = sum_gz / samples;
+
+    // Calculate offsets in raw units
+    offsets->accel.x = -(int16_t)(avg_ax * config.accel_range.scale / config.accel_uom);
+    offsets->accel.y = -(int16_t)(avg_ay * config.accel_range.scale / config.accel_uom);
+    // For Z, subtract 1g (assuming sensor is flat and Z points up)
+    offsets->accel.z = (int16_t)((config.accel_range.scale) * (1.0f - (avg_az / config.accel_uom)));
+    offsets->gyro.x = -(int16_t)(avg_gx * config.gyro_range.scale / config.gyro_uom);
+    offsets->gyro.y = -(int16_t)(avg_gy * config.gyro_range.scale / config.gyro_uom);
+    offsets->gyro.z = -(int16_t)(avg_gz * config.gyro_range.scale / config.gyro_uom);
+    return OK;
+}
